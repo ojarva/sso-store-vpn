@@ -23,19 +23,28 @@ class VPNUpdate:
         return self._db
 
     @classmethod
-    def escape(cls, string):
+    def _escape(cls, string):
+        """ Crappy workaround to escape MySQL query parameters """
         if string is None:
             return "null"
         return "'"+_mysql.escape_string(str(string))+"'"
+        
+    @classmethod
+    def escape(cls, items):
+        """ If items is list, returns escaped list of MySQL query
+            parameters. Otherwise, escaped string """
+        if isinstance(items, list):
+            return [cls._escape(item) for item in items]
+        return cls._escape(items)
 
     @timing("vpn.update.session.open")
     def open_session(self, username, cert_name, local_ip, remote_ip, start_time, end_time_real, bytes_in, bytes_out):
         statsd.incr("vpn.update.session.open")
         now = datetime.datetime.now()
 
-        self.db.query("UPDATE vpn_per_device SET end_time_real=%s WHERE cert_name=%s AND end_time_real is NULL AND server_hostname=%s" % (self.escape(now), self.escape(cert_name), self.escape(self.server_hostname)))
+        self.db.query("UPDATE vpn_per_device SET end_time_real=%s WHERE cert_name=%s AND end_time_real is NULL AND server_hostname=%s" % tuple(self.escape([now, cert_name, self.server_hostname])))
         self.db.store_result()
-        self.db.query("INSERT INTO vpn_per_device VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)" %  (self.escape(username), self.escape(cert_name), self.escape(local_ip), self.escape(remote_ip), self.escape(self.server_hostname), self.escape(start_time), self.escape(now), self.escape(end_time_real), self.escape(bytes_in), self.escape(bytes_out), self.escape(now)))
+        self.db.query("INSERT INTO vpn_per_device VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)" % tuple(self.escape([username, cert_name, local_ip, remote_ip, self.server_hostname, start_time, now, end_time_real, bytes_in, bytes_out, now])))
         self.db.store_result()
         self.redis.rpush("ip-resolve-queue", local_ip.split(":")[0])
         self.redis.rpush("ip-resolve-queue", remote_ip.split(":")[0])
@@ -49,11 +58,11 @@ class VPNUpdate:
         redis_key_prefix = "openvpn-update-tmp-%s-%s-" % (self.server_hostname, cert_name)
         bytes_in, bytes_out, known_connected = self.redis.mget(redis_key_prefix+"bytes_in", redis_key_prefix+"bytes_out", redis_key_prefix+"known_connected")
         if bytes_in is not None and bytes_out is not None and known_connected:
-            self.db.query("UPDATE vpn_per_device SET end_time_real=%s, bytes_in=%s, bytes_out=%s, known_connected=%s WHERE cert_name=%s AND end_time_real is NULL AND server_hostname=%s" % (self.escape(end_time_real), self.escape(bytes_in), self.escape(bytes_out), self.escape(known_connected), self.escape(cert_name), self.escape(self.server_hostname)))
+            self.db.query("UPDATE vpn_per_device SET end_time_real=%s, bytes_in=%s, bytes_out=%s, known_connected=%s WHERE cert_name=%s AND end_time_real is NULL AND server_hostname=%s" % tuple(self.escape([end_time_real, bytes_in, bytes_out, known_connected, cert_name, self.server_hostname])))
             self.db.store_result()
             self.redis.delete(redis_key_prefix+"bytes_in", redis_key_prefix+"bytes_out", redis_key_prefix+"known_connected", redis_key_prefix+"last_update")
         else:
-            self.db.query("UPDATE vpn_per_device SET end_time_real=%s WHERE cert_name=%s AND end_time_real is NULL AND server_hostname=%s" % (self.escape(end_time_real), self.escape(cert_name), self.escape(self.server_hostname)))
+            self.db.query("UPDATE vpn_per_device SET end_time_real=%s WHERE cert_name=%s AND end_time_real is NULL AND server_hostname=%s" % tuple(self.escape([end_time_real, cert_name, self.server_hostname])))
             self.db.store_result()
         statsd.gauge("vpn.traffic.in."+cert_name, 0)
         statsd.gauge("vpn.traffic.out."+cert_name, 0)
@@ -71,7 +80,7 @@ class VPNUpdate:
             last_update = 0
         if random.random() < 0.18 or time.time() - last_update > 60 + random.random() * 20:
             statsd.incr("vpn.update.session.update")
-            self.db.query("UPDATE vpn_per_device SET known_connected=%s, bytes_in=%s, bytes_out=%s WHERE server_hostname=%s AND cert_name=%s AND end_time_real is NULL" % (self.escape(now), self.escape(bytes_in), self.escape(bytes_out), self.escape(self.server_hostname), self.escape(cert_name)))
+            self.db.query("UPDATE vpn_per_device SET known_connected=%s, bytes_in=%s, bytes_out=%s WHERE server_hostname=%s AND cert_name=%s AND end_time_real is NULL" % tuple(self.escape([now, bytes_in, bytes_out, self.server_hostname, cert_name])))
             self.db.store_result()
             self.redis.delete(redis_key_prefix+"bytes_in", redis_key_prefix+"bytes_out", redis_key_prefix+"known_connected")
             self.redis.set(redis_key_prefix+"last_update", time.time())
